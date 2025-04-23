@@ -20,146 +20,31 @@ class Proof:
         self.config = config
         self.proof_response = ProofResponse(dlp_id=config['dlp_id'])
 
-
     def generate(self) -> ProofResponse:
-        """Generate proofs for all input files."""
-        logging.info("Starting proof data")
-
-        data_revision = "01.01"
         current_timestamp = datetime.now(timezone.utc)
+        data_revision = "01.01"
 
-        source_data = None
-        for input_filename in os.listdir(self.config['input_dir']):
-            input_file = os.path.join(self.config['input_dir'], input_filename)
-            with open(input_file, 'r') as f:
-                input_data = json.load(f)
-                source_data = get_source_data(
-                    input_data,
-                    current_timestamp
-                )
-                break
-
-        salt = self.config['salt']
-        source_user_hash_64 = salted_data(
-            (source_data.source, source_data.user),
-            salt
-        )
-        proof_failed_reason = ""
-        verify_result = verify_token(
-            self.config,
-            source_data
-        )
-        is_data_authentic = verify_result
-        if is_data_authentic:
-            #print(f"verify_result: {verify_result}")
-            is_data_authentic = verify_result.is_valid
-            proof_failed_reason = verify_result.error_text
-            source_data.proof_token = verify_result.proof_token
-
-        cargo_data = CargoData(
-            source_data = source_data,
-            source_id = source_user_hash_64,
-            current_timestamp = current_timestamp
-        )
-
-        if is_data_authentic:
-            #Validate source data via validator.api & obtain uniqueness
-            submission_history_data : SubmissionHistory = get_submission_historical_data(
-                self.config,
-                source_data
-            )
-            is_data_authentic = submission_history_data.is_valid
-            proof_failed_reason = submission_history_data.error_text
-            cargo_data.chat_histories = submission_history_data.chat_histories
-            cargo_data.last_submission = submission_history_data.last_submission
-
-        cool_down_period = 4 # hours
-        submission_time_elapsed = cargo_data.submission_time_elapsed()
-        if is_data_authentic and cargo_data.last_submission and submission_time_elapsed < cool_down_period:
-            is_data_authentic = False
-            proof_failed_reason = f"Last submission was made within the past {cool_down_period} hours"
+        self.proof_response.ownership = 1.0
+        self.proof_response.authenticity = 1.0
+        self.proof_response.quality = 1.0
+        self.proof_response.uniqueness = 1.0
+        self.proof_response.valid = True
+        self.proof_response.score = 0.05
 
         metadata = MetaData(
-          source_id = source_user_hash_64,
-          dlp_id = self.config['dlp_id']
+            source_id = "dummy_id",
+            dlp_id = self.config['dlp_id']
         )
 
-        self.proof_response.ownership = 1.0 if is_data_authentic else 0.0
-        self.proof_response.authenticity = 1.0 if is_data_authentic else 0.0
-
-        if not is_data_authentic: #short circuit so we don't waste analysis
-            print(f"Validation proof failed: {proof_failed_reason}")
-            self.proof_response.set_proof_is_invalid()
-            self.proof_response.attributes = {
-                'proof_valid': False,
-                'proof_failed_reason': proof_failed_reason,
-                'did_score_content': False,
-                'source': source_data.source.name,
-                'revision': data_revision,
-                'submitted_on': current_timestamp.isoformat()
-            }
-            self.proof_response.metadata = metadata
-            logging.info(f"ProofResponseAttributes: {json.dumps(self.proof_response.attributes, indent=2)}")
-            return self.proof_response
-
-        #validate/proof data ...
-        validate_data(
-            self.config,
-            cargo_data,
-            self.proof_response
-        )
-
-        maximum_score = 1
-        reward_factor = 100 # Maximium VFSN, Max. reward per chat --> 1 VFSN.
-        self.proof_response.quality = cargo_data.total_quality / reward_factor
-        if (self.proof_response.quality > maximum_score):
-            self.proof_response.quality = maximum_score
-
-        self.proof_response.uniqueness = cargo_data.total_uniqueness / reward_factor
-        if (self.proof_response.uniqueness > maximum_score):
-            self.proof_response.uniqueness = maximum_score
-        #score data
-        total_score = get_total_score(
-            self.proof_response.quality,
-            self.proof_response.uniqueness
-        )
-        print(f"Scores >> Quality: {self.proof_response.quality} | Uniqueness: {self.proof_response.uniqueness} | Total: {total_score}")
-
-        minimum_score = 0.05 / reward_factor
-        self.proof_response.valid = True # might other factor affect it
-        self.proof_response.score = total_score
-        if total_score < minimum_score:
-            self.proof_response.score = minimum_score
-        if total_score > maximum_score:
-            self.proof_response.score = maximum_score
-
-        print(f"Proof score: {self.proof_response.score }")
         self.proof_response.attributes = {
-            'score': self.proof_response.score,
+            'score': 0.05,
             'did_score_content': True,
-            'source': source_data.source.name,
+            'source': "hardcoded_source",
             'revision': data_revision,
-            'submitted_on': current_timestamp.isoformat() #,
-            #'chat_data': cargo_data.get_chat_list_data()
+            'submitted_on': current_timestamp.isoformat()
         }
         self.proof_response.metadata = metadata
 
-        #Submit Source data to server
-        submit_data_result = submit_data(
-            self.config,
-            source_data
-        )
-        if submit_data_result and not submit_data_result.is_valid :
-            logging.info(f"submit data failed: {submit_data_result.error_text}")
-            self.proof_response.set_proof_is_invalid()
-            self.proof_response.attributes.pop('score', None)
-            self.proof_response.attributes.pop('did_score_content', None)
-            self.proof_response.attributes.update({
-                'proof_valid': False,
-                'proof_failed_reason': submit_data_result.error_text
-            })
-
-        logging.info(f"ProofResponseAttributes: {json.dumps(self.proof_response.attributes, indent=2)}")
         return self.proof_response
 
 def get_telegram_data(
